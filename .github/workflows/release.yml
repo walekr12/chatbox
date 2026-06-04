@@ -1,0 +1,90 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v0.0.1-timeline.1
+        required: true
+        default: v0.0.1-timeline.1
+      prerelease:
+        description: Mark the GitHub release as a prerelease
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Windows build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Get pnpm store path
+        id: pnpm-store
+        shell: pwsh
+        run: echo "path=$(pnpm store path)" >> $env:GITHUB_OUTPUT
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm run check
+
+      - name: Build renderer and main
+        run: pnpm run build
+
+      - name: Package Windows app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm exec electron-builder build --win --publish never
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatbox-windows
+          path: |
+            release/build/*.exe
+            release/build/*.blockmap
+            release/build/latest*.yml
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: Chatbox Timeline ${{ inputs.tag }}
+          prerelease: ${{ inputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            release/build/*.exe
+            release/build/*.blockmap
+            release/build/latest*.yml
